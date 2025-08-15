@@ -11,8 +11,6 @@
  * $Id: enc28j60.c,v 1.22 2007/12/20 10:47:01 claudio Exp $
  */
 
-#include <alloca.h>
-
 #include <lwip/debug.h>
 #include <lwip/dhcp.h>
 #include <lwip/err.h>
@@ -63,7 +61,7 @@ static void spi_read_buf(struct enc28j60 *priv, uint16_t len, uint8_t *data)
 {
 	uint32_t buf = ENC28J60_READ_BUF_MEM;
 	spidev_xfer_t s[] = {
-		{ .rx = &buf, .tx = &buf, .len = SPI_OPLEN },
+		{ .rx = &buf, .tx = &buf, .len = SPI_OPLEN, .flags = XFER_CONT },
 		{ .rx = data, .len = len }
 	};
 
@@ -75,25 +73,26 @@ static void spi_read_buf(struct enc28j60 *priv, uint16_t len, uint8_t *data)
  */
 static void spi_read_pbuf(struct enc28j60 *priv, struct pbuf *p)
 {
-	uint32_t nxfers, buf = ENC28J60_READ_BUF_MEM;
-	spidev_xfer_t *s, *ss;
+	int buf = ENC28J60_READ_BUF_MEM;
+	int n = 1 + pbuf_clen(p);
+	spidev_xfer_t ss[n], *s = ss;
 
-	nxfers = pbuf_clen(p) + 1;
-	s = ss = alloca(nxfers * sizeof(spidev_xfer_t));
-
-	s->rx = &buf;
-	s->tx = &buf;
+	s->tx = s->rx = &buf;
 	s->len = SPI_OPLEN;
+	s->flags = XFER_CONT;
 	s++;
 
 	for (struct pbuf *q = p; q != NULL; q = q->next) {
 		s->rx = q->payload;
 		s->tx = NULL;
 		s->len = q->len;
+		s->flags = XFER_CONT;
 		s++;
 	}
 
-	(priv->spidev)(ss, nxfers);
+	ss[n - 1].flags &= ~XFER_CONT;
+
+	(priv->spidev)(ss, n);
 }
 
 /*
@@ -101,25 +100,26 @@ static void spi_read_pbuf(struct enc28j60 *priv, struct pbuf *p)
  */
 static void spi_write_pbuf(struct enc28j60 *priv, struct pbuf *p)
 {
-	uint32_t nxfers, buf = ENC28J60_WRITE_BUF_MEM;
-	spidev_xfer_t *s, *ss;
+	int buf = ENC28J60_WRITE_BUF_MEM;
+	int n = 1 + pbuf_clen(p);
+	spidev_xfer_t ss[n], *s = ss;
 
-	nxfers = pbuf_clen(p) + 1;
-	s = ss = alloca(nxfers * sizeof(spidev_xfer_t));
-
-	s->rx = &buf;
-	s->tx = &buf;
+	s->tx = s->rx = &buf;
 	s->len = SPI_OPLEN;
+	s->flags = XFER_CONT;
 	s++;
 
 	for (struct pbuf *q = p; q != NULL; q = q->next) {
 		s->rx = NULL;
 		s->tx = q->payload;
 		s->len = q->len;
+		s->flags = XFER_CONT;
 		s++;
 	}
 
-	(priv->spidev)(ss, nxfers);
+	ss[n - 1].flags &= ~XFER_CONT;
+
+	(priv->spidev)(ss, n);
 }
 
 /*

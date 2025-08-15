@@ -51,8 +51,8 @@ static bgrt_vint_t exti_vint;
 static bgrt_sem_t spidev_sem;
 static bgrt_vint_t spidev_vint;
 
-static const spidev_xfer_t *xfer_current;
-static uint32_t xfer_count;
+static const spidev_xfer_t *current;
+static volatile int nxfers;
 
 static void spidev_xfer(const spidev_xfer_t *);
 
@@ -67,9 +67,11 @@ BGRT_ISR(SPI_DMA_RX_ISR)
 	dma_clear_interrupt_flags(SPI_DMA, SPI_DMA_RX_CH, DMA_TCIF);
 	dma_disable_channel(SPI_DMA, SPI_DMA_RX_CH);
 	spi_disable_rx_dma(SPI_DMA);
-	if (--xfer_count) {
-		xfer_current++;
-		spidev_xfer(xfer_current);
+	if (!(current->flags & XFER_CONT))
+		gpio_set(SPI_GPIO_PORT, SPI_GPIO_NSS);
+	if (--nxfers) {
+		current++;
+		spidev_xfer(current);
 	} else {
 		gpio_set(SPI_GPIO_PORT, SPI_GPIO_NSS);
 		bgrt_vint_push(&spidev_vint, &bgrt_kernel.kblock.vic);
@@ -184,14 +186,14 @@ static void spidev_xfer(const spidev_xfer_t *xfer)
 	spi_enable_tx_dma(SPI_DEV);
 }
 
-static void spidev_transceive(spidev_xfer_t *first, uint32_t count)
+static void spidev_transceive(const spidev_xfer_t *s, int count)
 {
-	BGRT_ASSERT(first, "first != NULL");
+	BGRT_ASSERT(s, "s != NULL");
 	BGRT_ASSERT(count, "count != 0");
 
-	xfer_current = first;
-	xfer_count = count;
-	spidev_xfer(first);
+	current = s;
+	nxfers = count;
+	spidev_xfer(s);
 	bgrt_sem_lock(&spidev_sem);
 }
 
