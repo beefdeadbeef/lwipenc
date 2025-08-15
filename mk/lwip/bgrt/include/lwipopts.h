@@ -13,6 +13,7 @@
 #define LWIP_DHCP		1
 /**/
 #define IP_DEFAULT_TTL		64
+#define TCP_MSS			1460
 #define LWIP_TCP_RTO_TIME	1000
 #define LWIP_TCP_CLOSE_TIMEOUT_MS_DEFAULT	2000
 /**/
@@ -33,6 +34,7 @@
 #define TCPIP_THREAD_NAME		"tcpip"
 /*
  */
+#define BGRT_SYNC_NR		20
 /*
  */
 #define LWIP_DBG_MIN_LEVEL	LWIP_DBG_LEVEL_ALL

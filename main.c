@@ -144,7 +144,7 @@ static unsigned idle_arg;
 static void late_init(void *arg)
 {
 	iface_init(arg);
-#if 0
+#if 1
 	app_init(arg);
 #endif
 }
