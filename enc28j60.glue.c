@@ -6,6 +6,7 @@
 #include <libopencm3/stm32/exti.h>
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/stm32/rcc.h>
+#include <libopencm3/stm32/timer.h>
 #include <libopencm3/stm32/spi.h>
 
 #include <bugurt.h>
@@ -27,10 +28,23 @@
 #define	SPI_DMA			DMA2
 
 #define	SPI_GPIO_PORT		GPIOA
+#define	SPI_GPIO_SCK		GPIO3
 #define	SPI_GPIO_NSS		GPIO4
-#define	SPI_GPIO_SCK		GPIO5
+#define	SPI_GPIO_SCKIN		(GPIO1|GPIO5)
 #define	SPI_GPIO_MISO		GPIO6
 #define	SPI_GPIO_MOSI		GPIO7
+
+#define	SPI_CLK_FREQ		20000000u
+#define	SPI_CLK_PERIOD		(2 * rcc_apb1_frequency / SPI_CLK_FREQ)
+
+#define	SPI_TIM_MASTER		TIM2
+#define	SPI_TIM_MASTER_CLK	RCC_TIM2
+#define	SPI_TIM_MASTER_IC	TIM_IC2
+
+#define	SPI_TIM_SLAVE		TIM9
+#define	SPI_TIM_SLAVE_CLK	RCC_TIM9
+#define	SPI_TIM_SLAVE_OC	TIM_OC2
+#define	SPI_TIM_SLAVE_TRIGGER	TIM_SMCR_TS_ITR0
 
 #define	SPI_DMA_RX_CH		DMA_CHANNEL1
 #define	SPI_DMA_RX_REQ		DMA_REQ_SPI1_RX
@@ -66,7 +80,6 @@ BGRT_ISR(SPI_DMA_RX_ISR)
 {
 	dma_clear_interrupt_flags(SPI_DMA, SPI_DMA_RX_CH, DMA_TCIF);
 	dma_disable_channel(SPI_DMA, SPI_DMA_RX_CH);
-	spi_disable_rx_dma(SPI_DMA);
 	if (!(current->flags & XFER_CONT))
 		gpio_set(SPI_GPIO_PORT, SPI_GPIO_NSS);
 	if (--nxfers) {
@@ -82,7 +95,6 @@ void SPI_DMA_TX_ISR()
 {
 	dma_clear_interrupt_flags(SPI_DMA, SPI_DMA_TX_CH, DMA_TCIF);
 	dma_disable_channel(SPI_DMA, SPI_DMA_TX_CH);
-	spi_disable_tx_dma(SPI_DMA);
 }
 
 static void spidev_signal(void *ctx)
@@ -112,6 +124,8 @@ static void exti_ll_init()
 static void spidev_ll_init()
 {
 	rcc_periph_clock_enable(SPI_DEV_CLK);
+	rcc_periph_clock_enable(SPI_TIM_MASTER_CLK);
+	rcc_periph_clock_enable(SPI_TIM_SLAVE_CLK);
 
 	dma_channel_reset(SPI_DMA, SPI_DMA_RX_CH);
 	dma_set_channel_request(SPI_DMA, SPI_DMA_RX_CH, SPI_DMA_RX_REQ);
@@ -135,15 +149,26 @@ static void spidev_ll_init()
 	nvic_set_priority(SPI_DMA_TX_IRQ, SPI_DMA_IRQ_PRIO);
 	nvic_enable_irq(SPI_DMA_TX_IRQ);
 
+	timer_one_shot_mode(SPI_TIM_MASTER);
+	timer_set_master_mode(SPI_TIM_MASTER, TIM_CR2_MMS_ENABLE);
+	timer_slave_set_trigger(SPI_TIM_MASTER, TIM_SMCR_TS_TI2FP2);
+	timer_slave_set_mode(SPI_TIM_MASTER, TIM_SMCR_SMS_ECM1);
+	timer_ic_set_input(SPI_TIM_MASTER, SPI_TIM_MASTER_IC, TIM_IC_IN_TI2);
+	timer_ic_set_polarity(SPI_TIM_MASTER, SPI_TIM_MASTER_IC, TIM_IC_FALLING);
+
+	timer_set_period(SPI_TIM_SLAVE, SPI_CLK_PERIOD - 1);
+	timer_slave_set_trigger(SPI_TIM_SLAVE, SPI_TIM_SLAVE_TRIGGER);
+	timer_slave_set_mode(SPI_TIM_SLAVE, TIM_SMCR_SMS_GM);
+	timer_set_oc_mode(SPI_TIM_SLAVE, SPI_TIM_SLAVE_OC, TIM_OCM_PWM2);
+	timer_set_oc_value(SPI_TIM_SLAVE, SPI_TIM_SLAVE_OC, SPI_CLK_PERIOD / 2);
+	timer_enable_oc_output(SPI_TIM_SLAVE, SPI_TIM_SLAVE_OC);
+	timer_enable_counter(SPI_TIM_SLAVE);
+
 	rcc_periph_reset_pulse(SPI_DEV_RST);
-	spi_init_master(SPI_DEV,
-                        SPI_CR1_BAUDRATE_FPCLK_DIV_8,
-                        SPI_CR1_CPOL_CLK_TO_0_WHEN_IDLE,
-                        SPI_CR1_CPHA_CLK_TRANSITION_1,
-                        SPI_CR1_DFF_8BIT,
-                        SPI_CR1_MSBFIRST);
 	spi_enable_software_slave_management(SPI_DEV);
-	spi_set_nss_high(SPI_DEV);
+	spi_set_nss_low(SPI_DEV);
+	spi_enable_rx_dma(SPI_DEV);
+	spi_enable_tx_dma(SPI_DEV);
 	spi_enable(SPI_DEV);
 
 	gpio_set_mux(AFIO_GMUX_SPI1_A4);
@@ -154,11 +179,13 @@ static void spidev_ll_init()
 
 	gpio_set_mode(SPI_GPIO_PORT, GPIO_MODE_OUTPUT_10_MHZ,
 		      GPIO_CNF_OUTPUT_ALTFN_PUSHPULL,
-		      SPI_GPIO_SCK|SPI_GPIO_MOSI);
+		      SPI_GPIO_SCK|SPI_GPIO_MISO);
 
 	gpio_set_mode(SPI_GPIO_PORT, GPIO_MODE_INPUT,
 		      GPIO_CNF_INPUT_FLOAT,
-		      SPI_GPIO_MISO);
+		      SPI_GPIO_SCKIN|SPI_GPIO_MOSI);
+
+	gpio_set(SPI_GPIO_PORT, SPI_GPIO_NSS);
 }
 
 static void dma_setup_channel(uint32_t dma, uint8_t chan,
@@ -181,9 +208,10 @@ static void spidev_xfer(const spidev_xfer_t *xfer)
 {
 	dma_setup_channel(SPI_DMA, SPI_DMA_RX_CH, xfer->rx, xfer->len);
 	dma_setup_channel(SPI_DMA, SPI_DMA_TX_CH, xfer->tx, xfer->len);
+	timer_set_counter(SPI_TIM_MASTER, 2);
+	timer_set_period(SPI_TIM_MASTER, xfer->len << 3);
 	gpio_clear(SPI_GPIO_PORT, SPI_GPIO_NSS);
-	spi_enable_rx_dma(SPI_DEV);
-	spi_enable_tx_dma(SPI_DEV);
+	timer_enable_counter(SPI_TIM_MASTER);
 }
 
 static void spidev_transceive(const spidev_xfer_t *s, int count)
@@ -208,6 +236,7 @@ void exti_init(void *ctx)
 #if SPIDEV_LOOPBACK_TEST
 static uint8_t rxbuf[256];
 static uint8_t txbuf[256];
+#include <string.h>
 #endif
 
 spidev_t spidev_init(void)
