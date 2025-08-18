@@ -708,34 +708,6 @@ static void enc28j60_hw_rx(struct netif *iface)
 }
 
 /*
- * Calculate free space in RxFIFO
- */
-static int enc28j60_get_free_rxfifo(struct enc28j60 *priv)
-{
-	int epkcnt, erxst, erxnd, erxwr, erxrd;
-	int free_space;
-
-	epkcnt = regb_read(priv, EPKTCNT);
-	if (epkcnt >= 255)
-		free_space = -1;
-	else {
-		erxst = regw_read(priv, ERXSTL);
-		erxnd = regw_read(priv, ERXNDL);
-		erxwr = regw_read(priv, ERXWRPTL);
-		erxrd = regw_read(priv, ERXRDPTL);
-
-		if (erxwr > erxrd)
-			free_space = (erxnd - erxst) - (erxwr - erxrd);
-		else if (erxwr == erxrd)
-			free_space = (erxnd - erxst);
-		else
-			free_space = erxrd - erxwr - 1;
-	}
-
-	return free_space;
-}
-
-/*
  * Access the PHY to determine link status
  */
 static void enc28j60_check_link_status(struct netif *iface)
@@ -861,11 +833,7 @@ loop:	sys_sem_wait(&priv->rxready);
 		if ((intflags & EIR_RXERIF) != 0) {
 			loop++;
 			LWIP_DEBUGF(ENC28J60_DEBUG, ("*Int RXErr\n"));
-			/* Check free FIFO space to flag RX overrun */
-			if (enc28j60_get_free_rxfifo(priv) <= 0) {
-				LWIP_DEBUGF(ENC28J60_DEBUG, ("RX Overrun"));
-				LINK_STATS_INC(link.drop);
-			}
+			LINK_STATS_INC(link.err);
 			reg_bfclr(priv, EIR, EIR_RXERIF);
 		}
 		/* RX handler */
