@@ -14,45 +14,48 @@
 
 #include "enc28j60.glue.h"
 
-#define	EXTI_REQ		EXTI0
+#define	EXTI_REQ		EXTI5
 #define	EXTI_PORT		GPIOB
-#define	EXTI_GPIO		GPIO0
-#define	EXTI_IRQ		NVIC_EXTI0_IRQ
-#define	EXTI_ISR		exti0_isr
+#define	EXTI_GPIO		GPIO5
+#define	EXTI_IRQ		NVIC_EXTI9_5_IRQ
+#define	EXTI_ISR		exti9_5_isr
 
 #define	EXTI_IRQ_PRIO		((BGRT_CONFIG_CRITSEC_PRIO + 2) <<4)
 
-#define	SPI_DEV			SPI1
-#define	SPI_DEV_CLK		RCC_SPI1
-#define	SPI_DEV_RST		RST_SPI1
+#define	SPI_DEV			SPI4
+#define	SPI_DEV_GMUX		AFIO_GMUX_SPI4_B6
+#define	SPI_DEV_CLK		RCC_SPI4
+#define	SPI_DEV_RST		RST_SPI4
 #define	SPI_DMA			DMA2
 
-#define	SPI_GPIO_PORT		GPIOA
-#define	SPI_GPIO_SCK		GPIO3
-#define	SPI_GPIO_NSS		GPIO4
-#define	SPI_GPIO_SCKIN		(GPIO1|GPIO5)
-#define	SPI_GPIO_MISO		GPIO6
-#define	SPI_GPIO_MOSI		GPIO7
+#define	SPI_GPIO_PORT		GPIOB
+#define	SPI_GPIO_SCK		GPIO4
+#define	SPI_GPIO_NSS		GPIO6
+#define	SPI_GPIO_SCKIN		GPIO7
+#define	SPI_GPIO_MISO		GPIO8
+#define	SPI_GPIO_MOSI		GPIO9
 
 #define	SPI_CLK_FREQ		20000000u
 #define	SPI_CLK_PERIOD		(2 * rcc_apb1_frequency / SPI_CLK_FREQ)
 
-#define	SPI_TIM_MASTER		TIM2
-#define	SPI_TIM_MASTER_CLK	RCC_TIM2
-#define	SPI_TIM_MASTER_IC	TIM_IC2
+#define	SPI_TIM_MASTER		TIM4
+#define	SPI_TIM_MASTER_GMUX	AFIO_MUX_TIM4_B6
+#define	SPI_TIM_MASTER_CLK	RCC_TIM4
+#define	SPI_TIM_MASTER_IC	TIM_IC2			/* B7 <= B4 */
 
-#define	SPI_TIM_SLAVE		TIM9
-#define	SPI_TIM_SLAVE_CLK	RCC_TIM9
-#define	SPI_TIM_SLAVE_OC	TIM_OC2
-#define	SPI_TIM_SLAVE_TRIGGER	TIM_SMCR_TS_ITR0
+#define	SPI_TIM_SLAVE		TIM3
+#define	SPI_TIM_SLAVE_GMUX	AFIO_GMUX_TIM3_B4
+#define	SPI_TIM_SLAVE_CLK	RCC_TIM3
+#define	SPI_TIM_SLAVE_OC	TIM_OC1			/* B4 => B7 */
+#define	SPI_TIM_SLAVE_TRIGGER	TIM_SMCR_TS_ITR3
 
 #define	SPI_DMA_RX_CH		DMA_CHANNEL1
-#define	SPI_DMA_RX_REQ		DMA_REQ_SPI1_RX
+#define	SPI_DMA_RX_REQ		DMA_REQ_SPI4_RX
 #define	SPI_DMA_RX_IRQ		NVIC_DMA2_CHANNEL1_IRQ
 #define	SPI_DMA_RX_ISR		dma2_channel1_isr
 
 #define	SPI_DMA_TX_CH		DMA_CHANNEL2
-#define	SPI_DMA_TX_REQ		DMA_REQ_SPI1_TX
+#define	SPI_DMA_TX_REQ		DMA_REQ_SPI4_TX
 #define	SPI_DMA_TX_IRQ		NVIC_DMA2_CHANNEL2_IRQ
 #define	SPI_DMA_TX_ISR		dma2_channel2_isr
 
@@ -127,6 +130,10 @@ static void spidev_ll_init()
 	rcc_periph_clock_enable(SPI_TIM_MASTER_CLK);
 	rcc_periph_clock_enable(SPI_TIM_SLAVE_CLK);
 
+	gpio_set_mux(SPI_DEV_GMUX);
+	gpio_set_mux(SPI_TIM_MASTER_GMUX);
+	gpio_set_mux(SPI_TIM_SLAVE_GMUX);
+
 	dma_channel_reset(SPI_DMA, SPI_DMA_RX_CH);
 	dma_set_channel_request(SPI_DMA, SPI_DMA_RX_CH, SPI_DMA_RX_REQ);
 	dma_set_priority(SPI_DMA, SPI_DMA_RX_CH, DMA_CCR_PL_MEDIUM);
@@ -170,8 +177,6 @@ static void spidev_ll_init()
 	spi_enable_rx_dma(SPI_DEV);
 	spi_enable_tx_dma(SPI_DEV);
 	spi_enable(SPI_DEV);
-
-	gpio_set_mux(AFIO_GMUX_SPI1_A4);
 
 	gpio_set_mode(SPI_GPIO_PORT, GPIO_MODE_OUTPUT_10_MHZ,
 		      GPIO_CNF_OUTPUT_PUSHPULL,
