@@ -351,50 +351,6 @@ static void enc28j60_set_hw_macaddr(struct enc28j60 *priv, uint8_t *dev_addr)
 }
 
 /*
- * Debug routine to dump useful register contents
- */
-static void enc28j60_dump_regs(struct enc28j60 *priv)
-{
-	LWIP_DEBUGF(ENC28J60_DEBUG,
-		    ("HwRevID: 0x%02x\n"
-		     "Cntrl: ECON1 ECON2 ESTAT  EIR  EIE\n"
-		     "       0x%02x  0x%02x  0x%02x  0x%02x  0x%02x\n"
-		     "MAC  : MACON1 MACON3 MACON4\n"
-		     "       0x%02x   0x%02x   0x%02x\n"
-		     "Rx   : ERXST  ERXND  ERXWRPT ERXRDPT ERXFCON EPKTCNT MAMXFL\n"
-		     "       0x%04x 0x%04x 0x%04x  0x%04x  "
-		     "0x%02x    0x%02x    0x%04x\n"
-		     "Tx   : ETXST  ETXND  MACLCON1 MACLCON2 MAPHSUP\n"
-		     "       0x%04x 0x%04x 0x%02x     0x%02x     0x%02x\n",
-		     regb_read(priv, EREVID),
-
-		     regb_read(priv, ECON1),
-		     regb_read(priv, ECON2),
-		     regb_read(priv, ESTAT),
-		     regb_read(priv, EIR),
-		     regb_read(priv, EIE),
-
-		     regb_read(priv, MACON1),
-		     regb_read(priv, MACON3),
-		     regb_read(priv, MACON4),
-
-		     regw_read(priv, ERXSTL),
-		     regw_read(priv, ERXNDL),
-		     regw_read(priv, ERXWRPTL),
-		     regw_read(priv, ERXRDPTL),
-
-		     regb_read(priv, ERXFCON),
-		     regb_read(priv, EPKTCNT),
-		     regw_read(priv, MAMXFLL),
-
-		     regw_read(priv, ETXSTL),
-		     regw_read(priv, ETXNDL),
-		     regb_read(priv, MACLCON1),
-		     regb_read(priv, MACLCON2),
-		     regb_read(priv, MAPHSUP)));
-}
-
-/*
  * ERXRDPT need to be set always at odd addresses, refer to errata datasheet
  */
 static uint16_t erxrdpt_workaround(uint16_t next_packet_ptr,
@@ -544,53 +500,6 @@ static void enc28j60_read_tsv(struct enc28j60 *priv, uint8_t tsv[TSV_SIZE])
 	LWIP_DEBUGF(ENC28J60_DEBUG,
 		    ("reading TSV at addr:0x%04x\n", endptr + 1));
 	enc28j60_mem_read(priv, endptr + 1, TSV_SIZE, tsv);
-}
-
-static void enc28j60_dump_tsv(struct enc28j60 *priv, uint8_t tsv[TSV_SIZE])
-{
-	uint16_t tmp1, tmp2;
-	(void)priv;
-
-	LWIP_DEBUGF(ENC28J60_DEBUG, ("TSV:\n"));
-
-	tmp1 = tsv[1];
-	tmp1 <<= 8;
-	tmp1 |= tsv[0];
-
-	tmp2 = tsv[5];
-	tmp2 <<= 8;
-	tmp2 |= tsv[4];
-
-	LWIP_DEBUGF(ENC28J60_DEBUG,
-		    ("ByteCount: %d, CollisionCount: %d, TotByteOnWire: %d\n",
-		     tmp1, tsv[2] & 0x0f, tmp2));
-
-	LWIP_DEBUGF(ENC28J60_DEBUG,
-		    ("TxDone: %d, CRCErr:%d, LenChkErr: %d, LenOutOfRange: %d\n",
-		     TSV_GETBIT(tsv, TSV_TXDONE),
-		     TSV_GETBIT(tsv, TSV_TXCRCERROR),
-		     TSV_GETBIT(tsv, TSV_TXLENCHKERROR),
-		     TSV_GETBIT(tsv, TSV_TXLENOUTOFRANGE)));
-
-	LWIP_DEBUGF(ENC28J60_DEBUG,
-		    ("Multicast: %d, Broadcast: %d, PacketDefer: %d, ExDefer: %d\n",
-		     TSV_GETBIT(tsv, TSV_TXMULTICAST),
-		     TSV_GETBIT(tsv, TSV_TXBROADCAST),
-		     TSV_GETBIT(tsv, TSV_TXPACKETDEFER),
-		     TSV_GETBIT(tsv, TSV_TXEXDEFER)));
-	LWIP_DEBUGF(ENC28J60_DEBUG,
-		    ("ExCollision: %d, LateCollision: %d, Giant: %d, Underrun: %d\n",
-		     TSV_GETBIT(tsv, TSV_TXEXCOLLISION),
-		     TSV_GETBIT(tsv, TSV_TXLATECOLLISION),
-		     TSV_GETBIT(tsv, TSV_TXGIANT),
-		     TSV_GETBIT(tsv, TSV_TXUNDERRUN)));
-
-	LWIP_DEBUGF(ENC28J60_DEBUG,
-		    ("ControlFrame: %d, PauseFrame: %d, BackPressApp: %d, VLanTagFrame: %d\n",
-		     TSV_GETBIT(tsv, TSV_TXCONTROLFRAME),
-		     TSV_GETBIT(tsv, TSV_TXPAUSEFRAME),
-		     TSV_GETBIT(tsv, TSV_BACKPRESSUREAPP),
-		     TSV_GETBIT(tsv, TSV_TXVLANTAGFRAME)));
 }
 
 /*
