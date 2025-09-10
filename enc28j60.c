@@ -442,16 +442,25 @@ static void enc28j60_hw_init(struct enc28j60 *priv)
 		   MACON1_MARXEN | MACON1_TXPAUS | MACON1_RXPAUS);
 
 	/* enable automatic padding and CRC operations */
+#if defined(ENC28J60_HALF_DUPLEX)
+	regb_write(priv, MACON3,
+		   MACON3_PADCFG0 | MACON3_TXCRCEN |
+		   MACON3_FRMLNEN);
+	regb_write(priv, MACON4, 1 << 6);		/* DEFER bit */
+	/* set inter-frame gap (non-back-to-back) */
+	regw_write(priv, MAIPGL, 0x0C12);
+	/* set inter-frame gap (back-to-back) */
+	regb_write(priv, MABBIPG, 0x12);
+#else
 	regb_write(priv, MACON3,
 		   MACON3_PADCFG0 | MACON3_TXCRCEN |
 		   MACON3_FRMLNEN | MACON3_FULDPX);
 
 	/* set inter-frame gap (non-back-to-back) */
 	regb_write(priv, MAIPGL, 0x12);
-
 	/* set inter-frame gap (back-to-back) */
 	regb_write(priv, MABBIPG, 0x15);
-
+#endif
 	/*
 	 * MACLCON1 (default)
 	 * MACLCON2 (default)
@@ -462,13 +471,17 @@ static void enc28j60_hw_init(struct enc28j60 *priv)
 	/* Configure LEDs */
 	if (!enc28j60_phy_write(priv, PHLCON, ENC28J60_LAMPS_MODE))
 		goto err;
+#if defined(ENC28J60_HALF_DUPLEX)
+	if (!enc28j60_phy_write(priv, PHCON1, 0x00))
+		goto err;
+	if (!enc28j60_phy_write(priv, PHCON2, PHCON2_HDLDIS))
+		goto err;
+#else
 	if (!enc28j60_phy_write(priv, PHCON1, PHCON1_PDPXMD))
 		goto err;
 	if (!enc28j60_phy_write(priv, PHCON2, 0x00))
 		goto err;
-
-	enc28j60_dump_regs(priv);
-
+#endif
 	return;
 err:
 	LWIP_ASSERT("phy init", 0);
