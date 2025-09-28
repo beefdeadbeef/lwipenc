@@ -61,7 +61,7 @@ static void spi_read_buf(struct enc28j60 *priv, uint16_t len, uint8_t *data)
 {
 	int buf = ENC28J60_READ_BUF_MEM;
 	spidev_xfer_t s[] = {
-		{ .rx = &buf, .tx = &buf, .len = SPI_OPLEN, .flags = XFER_CONT },
+		{ .rx = &buf, .tx = &buf, .len = SPI_OPLEN },
 		{ .rx = data, .len = len }
 	};
 
@@ -79,18 +79,14 @@ static void spi_read_pbuf(struct enc28j60 *priv, struct pbuf *p)
 
 	s->tx = s->rx = &buf;
 	s->len = SPI_OPLEN;
-	s->flags = XFER_CONT;
 	s++;
 
 	for (struct pbuf *q = p; q != NULL; q = q->next) {
 		s->rx = q->payload;
 		s->tx = NULL;
 		s->len = q->len;
-		s->flags = XFER_CONT;
 		s++;
 	}
-
-	ss[n - 1].flags &= ~XFER_CONT;
 
 	(priv->spidev)(ss, n);
 }
@@ -106,18 +102,14 @@ static void spi_write_pbuf(struct enc28j60 *priv, struct pbuf *p)
 
 	s->tx = s->rx = &buf;
 	s->len = SPI_OPLEN;
-	s->flags = XFER_CONT;
 	s++;
 
 	for (struct pbuf *q = p; q != NULL; q = q->next) {
 		s->rx = NULL;
 		s->tx = q->payload;
 		s->len = q->len;
-		s->flags = XFER_CONT;
 		s++;
 	}
-
-	ss[n - 1].flags &= ~XFER_CONT;
 
 	(priv->spidev)(ss, n);
 }
@@ -129,9 +121,11 @@ static uint8_t spi_read_op(struct enc28j60 *priv, uint8_t op, uint8_t addr)
 {
 	int buf = op | (addr & ADDR_MASK);
 	int len = (addr & SPRD_MASK) ? SPI_OPLEN + 2 : SPI_OPLEN + 1;
-	spidev_xfer_t s = { .rx = &buf, .tx = &buf, .len = len };
+	spidev_xfer_t s[] = {
+ 		{ .rx = &buf, .tx = &buf, .len = len }
+	};
 
-	(priv->spidev)(&s, 1);
+	(priv->spidev)(s, 1);
 
 	return 0xff & ((addr & SPRD_MASK) ? buf >> 16 : buf >> 8);
 }
@@ -143,9 +137,11 @@ static void spi_write_op(struct enc28j60 *priv,
 			 uint8_t op, uint8_t addr, uint8_t val)
 {
 	int buf = op | (addr & ADDR_MASK) | val << 8;
-	spidev_xfer_t s = { .rx = &buf, .tx = &buf, .len = SPI_OPLEN + 1 };
+	spidev_xfer_t s[] = {
+		{ .rx = &buf, .tx = &buf, .len = SPI_OPLEN + 1 }
+	};
 
-	(priv->spidev)(&s, 1);
+	(priv->spidev)(s, 1);
 }
 
 /*

@@ -71,7 +71,7 @@ static bgrt_vint_t spidev_vint;
 static const spidev_xfer_t *current;
 static volatile int nxfers;
 
-static void spidev_xfer(const spidev_xfer_t *);
+static void spidev_xfer_setup(const spidev_xfer_t *);
 
 BGRT_ISR(EXTI_ISR)
 {
@@ -83,11 +83,10 @@ BGRT_ISR(SPI_DMA_RX_ISR)
 {
 	dma_clear_interrupt_flags(SPI_DMA, SPI_DMA_RX_CH, DMA_TCIF);
 	dma_disable_channel(SPI_DMA, SPI_DMA_RX_CH);
-	if (!(current->flags & XFER_CONT))
-		gpio_set(SPI_GPIO_PORT, SPI_GPIO_NSS);
 	if (--nxfers) {
 		current++;
-		spidev_xfer(current);
+		spidev_xfer_setup(current);
+		timer_enable_counter(SPI_TIM_MASTER);
 	} else {
 		gpio_set(SPI_GPIO_PORT, SPI_GPIO_NSS);
 		bgrt_vint_push(&spidev_vint, &bgrt_kernel.kblock.vic);
@@ -209,12 +208,17 @@ static void dma_setup_channel(uint32_t dma, uint8_t chan,
 	dma_enable_channel(dma, chan);
 }
 
-static void spidev_xfer(const spidev_xfer_t *xfer)
+static void spidev_xfer_setup(const spidev_xfer_t *xfer)
 {
 	dma_setup_channel(SPI_DMA, SPI_DMA_RX_CH, xfer->rx, xfer->len);
 	dma_setup_channel(SPI_DMA, SPI_DMA_TX_CH, xfer->tx, xfer->len);
 	timer_set_counter(SPI_TIM_MASTER, 2);
 	timer_set_period(SPI_TIM_MASTER, xfer->len << 3);
+}
+
+static void spidev_xfer_start(const spidev_xfer_t *xfer)
+{
+	spidev_xfer_setup(xfer);
 	gpio_clear(SPI_GPIO_PORT, SPI_GPIO_NSS);
 	timer_enable_counter(SPI_TIM_MASTER);
 }
@@ -226,7 +230,7 @@ static void spidev_transceive(const spidev_xfer_t *s, int count)
 
 	current = s;
 	nxfers = count;
-	spidev_xfer(s);
+	spidev_xfer_start(s);
 	bgrt_sem_lock(&spidev_sem);
 }
 
