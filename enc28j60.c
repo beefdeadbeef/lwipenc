@@ -41,8 +41,8 @@ enum {
 
 static struct enc28j60 {
 	spidev_t spidev;
+	extint_t extint;
 	sys_mutex_t lock;
-	sys_sem_t rxready;
 	sys_sem_t txready;
 	sys_thread_t rxhandler;
 	sys_thread_t txhandler;
@@ -686,7 +686,7 @@ static void enc28j60_rx_handler(void *ctx)
 
 	enc28j60_check_link_status(iface);
 
-loop:	sys_sem_wait(&priv->rxready);
+loop:	(priv->extint)();
 
 	sys_mutex_lock(&priv->lock);
 	/* disable further interrupts */
@@ -807,11 +807,11 @@ static err_t enc28j60_init(struct netif *iface)
 	struct enc28j60 *priv = iface->state;
 
 	sys_mutex_new(&priv->lock);
-	sys_sem_new(&priv->rxready, 0);
 	sys_sem_new(&priv->txready, 1);
 	sys_mbox_new(&priv->txqueue, TX_QUEUE_MAX);
 
 	priv->spidev = spidev_init();
+	priv->extint = extint_init();
 
 	enc28j60_hw_init(priv);
 	enc28j60_set_hw_macaddr(priv, iface->hwaddr);
@@ -825,7 +825,6 @@ static err_t enc28j60_init(struct netif *iface)
 					 enc28j60_tx_handler, iface,
 					 DEFAULT_THREAD_STACKSIZE,
 					 DEFAULT_THREAD_PRIO - 1);
-	exti_init(&priv->rxready);
 	enc28j60_hw_enable(priv);
 
 	iface->linkoutput = enc28j60_output;

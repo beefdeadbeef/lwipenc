@@ -63,7 +63,8 @@
 
 #define	SPIDEV_LOOPBACK_TEST	0
 
-static bgrt_vint_t exti_vint;
+static bgrt_sem_t extint_sem;
+static bgrt_vint_t extint_vint;
 
 static bgrt_sem_t spidev_sem;
 static bgrt_vint_t spidev_vint;
@@ -75,8 +76,9 @@ static void spidev_xfer_setup(const spidev_xfer_t *);
 
 BGRT_ISR(EXTI_ISR)
 {
-        exti_reset_request(EXTI_REQ);
-        bgrt_vint_push(&exti_vint, &bgrt_kernel.kblock.vic);
+	exti_reset_request(EXTI_REQ);
+	nvic_disable_irq(EXTI_IRQ);
+	bgrt_vint_push(&extint_vint, &bgrt_kernel.kblock.vic);
 }
 
 BGRT_ISR(SPI_DMA_RX_ISR)
@@ -234,12 +236,19 @@ static void spidev_transceive(const spidev_xfer_t *s, int count)
 	bgrt_sem_lock(&spidev_sem);
 }
 
-void exti_init(void *ctx)
+static void extint_wait()
 {
-	bgrt_sem_t **sem = ctx;
+	nvic_enable_irq(EXTI_IRQ);
+	bgrt_sem_lock(&extint_sem);
+}
 
-	bgrt_vint_init(&exti_vint, 2, spidev_signal, *sem);
+extint_t extint_init(void)
+{
 	exti_ll_init();
+	bgrt_sem_init(&extint_sem, 0);
+	bgrt_vint_init(&extint_vint, 2, spidev_signal, &extint_sem);
+
+	return extint_wait;
 }
 
 #if SPIDEV_LOOPBACK_TEST
