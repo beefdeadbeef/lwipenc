@@ -56,8 +56,6 @@
 
 #define	SPI_DMA_TX_CH		DMA_CHANNEL2
 #define	SPI_DMA_TX_REQ		DMA_REQ_SPI4_TX
-#define	SPI_DMA_TX_IRQ		NVIC_DMA2_CHANNEL2_IRQ
-#define	SPI_DMA_TX_ISR		dma2_channel2_isr
 
 #define	SPI_DMA_IRQ_PRIO	((BGRT_CONFIG_CRITSEC_PRIO + 1) <<4)
 
@@ -84,6 +82,7 @@ BGRT_ISR(EXTI_ISR)
 BGRT_ISR(SPI_DMA_RX_ISR)
 {
 	dma_clear_interrupt_flags(SPI_DMA, SPI_DMA_RX_CH, DMA_TCIF);
+	dma_disable_channel(SPI_DMA, SPI_DMA_TX_CH);
 	dma_disable_channel(SPI_DMA, SPI_DMA_RX_CH);
 	if (--nxfers) {
 		current++;
@@ -93,12 +92,6 @@ BGRT_ISR(SPI_DMA_RX_ISR)
 		gpio_set(SPI_GPIO_PORT, SPI_GPIO_NSS);
 		bgrt_vint_push(&spidev_vint, &bgrt_kernel.kblock.vic);
 	}
-}
-
-void SPI_DMA_TX_ISR()
-{
-	dma_clear_interrupt_flags(SPI_DMA, SPI_DMA_TX_CH, DMA_TCIF);
-	dma_disable_channel(SPI_DMA, SPI_DMA_TX_CH);
 }
 
 static void spidev_signal(void *ctx)
@@ -153,9 +146,6 @@ static void spidev_ll_init()
 	dma_set_memory_size(SPI_DMA, SPI_DMA_TX_CH, DMA_CCR_MSIZE_8BIT);
 	dma_set_peripheral_size(SPI_DMA, SPI_DMA_TX_CH, DMA_CCR_PSIZE_8BIT);
 	dma_set_peripheral_address(SPI_DMA, SPI_DMA_TX_CH, (uint32_t)&SPI_DR(SPI_DEV));
-	dma_enable_transfer_complete_interrupt(SPI_DMA, SPI_DMA_TX_CH);
-	nvic_set_priority(SPI_DMA_TX_IRQ, SPI_DMA_IRQ_PRIO);
-	nvic_enable_irq(SPI_DMA_TX_IRQ);
 
 	timer_one_shot_mode(SPI_TIM_MASTER);
 	timer_set_master_mode(SPI_TIM_MASTER, TIM_CR2_MMS_ENABLE);
