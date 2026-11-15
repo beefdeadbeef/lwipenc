@@ -1,0 +1,268 @@
+#+TITLE: lwipenc
+#+STARTUP: overview
+#+OPTIONS: toc:2
+
+* Overview
+
+=lwipenc= is an ENC28J60 Ethernet driver and example firmware for the
+AT32F403ACGU.  It integrates Microchip's SPI Ethernet controller with lwIP,
+libopencm3, and BuguRTOS.  The application obtains an IPv4 address with DHCP
+and runs a TCP echo service on port 7.
+
+This repository builds a complete firmware image, not just a standalone ENC
+driver.  It also contains an lwIP operating-system port for BuguRTOS in
+=mk/lwip/bgrt/=.
+
+The example supports two concurrent echo clients.  It does not configure a
+static or fallback IP address.
+
+* Features
+
+- ENC28J60 MAC/PHY driver adapted for lwIP, derived from the Linux driver.
+- AT32 SPI4 transfers using DMA2 and external-interrupt-driven receive handling.
+- lwIP 2.2.1 with IPv4, ARP, ICMP, DHCP, and the netconn API.
+- BuguRTOS integration for threads, semaphores, mutexes, mailboxes, and memory
+  pools.
+- Interface MAC address derived from the AT32 unique ID.
+- TCP echo listener on port 7 with two worker threads.
+- Optional diagnostics through ITM/SWO or SEGGER RTT.
+
+* Hardware
+
+** MCU and clocks
+
+| Item             | Configuration                                   |
+|------------------+-------------------------------------------------|
+| MCU              | AT32F403ACGU, Cortex-M4 with hard-float FPv4-SP |
+| Flash            | 1024 KiB at =0x08000000=                        |
+| RAM              | 96 KiB at =0x20000000=                          |
+| System clock     | 240 MHz from HSE/PLL                            |
+| APB1/APB2 clocks | 120 MHz                                         |
+| SPI4 clock       | 7.5 MHz (APB1 clock divided by 16)              |
+| SysTick          | 1 kHz nominal                                   |
+| Status LED       | PC13, toggled every 500 scheduler ticks         |
+| Debug interface  | SWD enabled; JTAG disabled                      |
+
+The selected libopencm3 clock configuration assumes an 8 MHz HSE.  The actual
+board, crystal, ENC28J60 module, power arrangement, and physical Ethernet wiring
+are not specified in this repository; verify these before running the firmware.
+
+** ENC28J60 connections
+
+| ENC28J60 function | AT32 signal | Configuration                        |
+|-------------------+-------------+--------------------------------------|
+| Interrupt         | PB5         | EXTI5, floating input, falling edge  |
+| Chip select       | PB6         | Software-controlled push-pull output |
+| SPI clock         | PB7         | SPI4 SCK, alternate function         |
+| SPI MISO          | PB8         | SPI4 MISO, floating input            |
+| SPI MOSI          | PB9         | SPI4 MOSI, alternate function        |
+
+PB6 is chip select, not a hardware NSS assignment.
+
+SPI4 operates as a mode-0, 8-bit, MSB-first master.  DMA2 channel 1 handles SPI
+RX and channel 2 handles TX.  Chip select remains asserted across the complete
+DMA transaction chain.
+
+No ENC28J60 hardware-reset GPIO is configured; the driver resets the controller
+over SPI.
+
+* Firmware operation
+
+** Startup sequence
+
+1. A constructor reads the 96-bit MCU unique ID before =main()=, copies its first
+   six bytes into the interface MAC address, and sets the locally administered
+   bit.
+2. =main()= initializes BuguRTOS, the 240 MHz clock tree, AFIO, DMA, GPIO,
+   SysTick, and the status pins, then enters the scheduler.
+3. The idle process initializes lwIP's tcpip thread.  Its callback creates and
+   configures the ENC28J60 network interface, starts DHCP, and starts the echo
+   application.
+4. The idle process then sleeps with =WFE= and toggles PC13 every 500 ticks.
+
+The echo listener starts after interface initialization; it does not wait for a
+DHCP lease.
+
+** TCP echo service
+
+The listener binds to =IP_ADDR_ANY= on TCP port 7 and creates two reusable worker
+threads.  Each worker disables Nagle's algorithm, receives netbufs, writes every
+fragment back to the same connection using =NETCONN_COPY=, and closes the
+connection when reception ends.  If neither worker becomes available, a newly
+accepted connection is closed.
+
+** ENC28J60 driver
+
+The driver uses synchronous SPI transactions from the caller's perspective.
+MCU DMA transfers command and pbuf segments, while the DMA interrupt advances
+segments, releases chip select, and wakes the waiting thread.
+
+Receive handling follows the ENC28J60 errata: packet count is polled instead of
+relying on =PKTIF=, and the odd-address =ERXRDPT= workaround is applied.  Late
+transmit collisions are retried up to 16 times.  Full-duplex operation is the
+default; defining ~ENC28J60_HALF_DUPLEX~ selects the half-duplex path.
+
+The ENC28J60's 8 KiB SRAM is partitioned as follows:
+
+| Region | Address range      | Size       |
+|--------+--------------------+------------|
+| RX     | =0x0000=--=0x19ff= | 6656 bytes |
+| TX     | =0x1a00=--=0x1fff= | 1536 bytes |
+
+The driver supports a maximum frame length of 1518 bytes and advertises an MTU
+of 1500 bytes.  Default receive filtering accepts valid-CRC unicast and broadcast
+frames.  Automatic padding/CRC, pause frames, link-state interrupts, and PHY LED
+link/activity indications are enabled.
+
+* Network configuration
+
+Project-specific lwIP settings are in =mk/lwip/bgrt/include/lwipopts.h=.
+
+| Setting         | Value                                        |
+|-----------------+----------------------------------------------|
+| Interface name  | =en=                                         |
+| Addressing      | DHCP, with no initial static address         |
+| Default netif   | ENC28J60 interface                           |
+| MAC address     | First six MCU unique-ID bytes, local bit set |
+| IPv4/ARP/ICMP   | Enabled                                      |
+| IPv6/DNS/AUTOIP | Disabled in this lwIP configuration          |
+| TCP MSS         | 1460                                         |
+| IP TTL          | 64                                           |
+| Echo endpoint   | Any IPv4 address, TCP port 7                 |
+| Concurrent echo | Two clients                                  |
+
+No fixed IP address, netmask, gateway, DHCP hostname, or fallback address is
+configured.
+
+* Building
+
+** Requirements
+
+- Git with submodule support.
+- GNU Make.
+- Python 3, used by libopencm3's linker-script generation.
+- An =arm-none-eabi= GCC toolchain with binutils/objcopy, ~gcc-ar~, libgcc, and
+  newlib.  Cortex-M4 hard-float and link-time-optimization support are required.
+- The submodule versions supplied by this repository.  In particular, the build
+  uses the project's libopencm3 and BuguRTOS forks rather than assuming an
+  arbitrary upstream checkout.
+
+The =printf= submodule is used by debug builds.  The =rtt= submodule is needed
+only for RTT output.
+
+** Clone
+
+#+begin_src sh
+git clone --recurse-submodules https://github.com/beefdeadbeef/lwipenc.git
+cd lwipenc
+#+end_src
+
+For an existing clone without initialized submodules:
+
+#+begin_src sh
+git submodule update --init --recursive
+#+end_src
+
+** Build commands
+
+#+begin_src sh
+make             # Build fw.elf and fw.bin
+make V=1         # Show full tool commands
+
+make DEBUG=1                 # Diagnostics through ITM/SWO stimulus port 0
+make DEBUG=RTT               # Diagnostics through SEGGER RTT channel 0
+#+end_src
+
+The default CFLAGS include debug symbols, size optimization, and LTO;
+non-debug builds omit diagnostic logging and lwIP assertions.
+
+The primary outputs are =fw.elf= and =fw.bin=.  The inherited libopencm3 rules
+also provide pattern targets such as =fw.hex=, =fw.srec=, and =fw.list=.
+Generation occurs in the source tree.  There is no top-level clean or flash
+target.
+
+* Flashing and debugging
+
+The supplied =.gdbinit= is tailored to a Black Magic Probe-compatible probe at
+=/dev/ttygdb= and an Orbcode GDB setup.  It loads =fw.elf= symbols, scans for and
+attaches to the target over SWD, and configures RTT and 240 MHz SWO/ITM tracing.
+It also sources =/usr/share/orbcode/gdbtrace.init=, so adapt that path and the
+probe device to the local installation.
+
+#+begin_src sh
+arm-none-eabi-gdb -x .gdbinit
+# After the probe has attached successfully:
+(gdb) load fw.elf
+#+end_src
+
+The script does not issue =load=, reset, or run commands automatically.  When
+programming the raw =fw.bin= with another tool, use flash address =0x08000000=.
+No project-specific OpenOCD configuration is provided.
+
+RTT discovery may require adjustment: the current GDB script scans only
+=0x20000000=--=0x20001000=, and the linker option that would fix the RTT control
+block's placement is commented out.
+
+* Repository layout
+
+| Path                                 | Purpose                                         |
+|--------------------------------------+-------------------------------------------------|
+| =main.c=                             | Startup, echo application, heartbeat, MAC setup |
+| =enc28j60.c=, =enc28j60.h=           | ENC28J60 driver and register definitions        |
+| =enc28j60.glue.c=, =enc28j60.glue.h= | AT32 SPI4, DMA2, and EXTI platform glue         |
+| =mk/lwip/bgrt/sys_arch.c=            | lwIP-to-BuguRTOS operating-system port          |
+| =mk/lwip/bgrt/include/=              | lwIP configuration and architecture headers     |
+| =mk/bgrt/=, =mk/lwip/=, =mk/debug/=  | Project make fragments                          |
+| =debug.c=, =debug.h=, =common.h=     | Diagnostic output and shared declarations       |
+| =Makefile=                           | Top-level firmware build                        |
+| =.gdbinit=                           | Probe-specific flash/debug environment          |
+| =libopencm3/=, =lwip/=, =bgrt/=      | Main library and RTOS submodules                |
+| =printf/=, =rtt/=                    | Optional debug-support submodules               |
+
+Build products and generated linker scripts are ignored by Git.  Existing
+firmware images, objects, libraries, and generated files may be stale and should
+not be treated as test results.
+
+* Known limitations and implementation notes
+
+- Only two echo clients are supported concurrently.  Several network API return
+  values are not checked.
+- Nonzero semaphore and mailbox timeouts in the BuguRTOS lwIP port are try/yield
+  loop counts, not milliseconds.  In particular, the listener's =500= argument
+  is not a reliable 500 ms timeout.
+- The lwIP port has six thread-descriptor slots, exactly enough for tcpip, the
+  listener, two echo workers, and the ENC RX/TX threads.  Adding threads requires
+  resource tuning.
+- The MAC generator sets the locally administered bit but does not explicitly
+  clear the multicast/group bit.
+- SPI/DMA waits have no timeout.  Some initialization failures are handled only
+  by assertions that are disabled in non-debug lwIP builds.
+- Successful-TX statistics are currently incremented both when transmission is
+  started and when completion is reported.
+- A compile-time SPI loopback test exists but is disabled.  No automated test or
+  hardware-validation suite for the complete echo application is included.
+
+* Credits and licensing
+
+The ENC28J60 driver was originally derived from Linux driver sources.  The lwIP
+adaptation and project integration are by Sergey Bolshakov
+<beefdeadbeef@gmail.com>; see the source headers for attribution.
+
+Licensing is per file, not uniformly GPL-2.0 across the repository:
+
+- =enc28j60.c= declares GPL-2.0-or-later.
+- =enc28j60.h= declares GPL-2.0.
+- Several other first-party files have no explicit license header, and there is
+  no single top-level license file.
+- Submodules retain their own licenses, including libopencm3's LGPL terms,
+  BuguRTOS's GPLv3 with linking exception, lwIP's BSD-style license, printf's MIT
+  license, and SEGGER RTT's separate terms.
+
+Consult the relevant source headers and submodule license files before copying,
+modifying, or distributing the code.
+
+* Contributing and contact
+
+Open an issue or pull request for bug reports, improvements, and platform ports.
+Follow the existing style and include a short description plus testing notes.
+The original author can also be reached at the address in the source headers.
