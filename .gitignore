@@ -1,4 +1,5 @@
 /generated.*.ld
+/.ccls
 *.[aod]
 *.elf
 *.bin
