@@ -45,6 +45,7 @@
 #define	SPI_DMA_IRQ_PRIO	((BGRT_CONFIG_CRITSEC_PRIO + 1) <<4)
 
 #define	SPIDEV_LOOPBACK_TEST	0
+#define	SPIDEV_XFER_ASYNC_LEN	4
 
 static bgrt_sem_t extint_sem;
 static bgrt_vint_t extint_vint;
@@ -56,6 +57,7 @@ static const spidev_xfer_t *current;
 static volatile int nxfers;
 
 static void spidev_xfer_setup(const spidev_xfer_t *);
+static void spidev_xfer_done(void);
 
 BGRT_ISR(EXTI_ISR)
 {
@@ -72,10 +74,8 @@ BGRT_ISR(SPI_DMA_RX_ISR)
 	if (--nxfers) {
 		current++;
 		spidev_xfer_setup(current);
-		dma_enable_channel(SPI_DMA, SPI_DMA_RX_CH);
-		dma_enable_channel(SPI_DMA, SPI_DMA_TX_CH);
 	} else {
-		gpio_set(SPI_GPIO_PORT, SPI_GPIO_NSS);
+		spidev_xfer_done();
 		bgrt_vint_push(&spidev_vint, &bgrt_kernel.kblock.vic);
 	}
 }
@@ -136,8 +136,6 @@ static void spidev_ll_init()
                         SPI_CR1_MSBFIRST);
 	spi_enable_software_slave_management(SPI_DEV);
 	spi_set_nss_high(SPI_DEV);
-	spi_enable_rx_dma(SPI_DEV);
-	spi_enable_tx_dma(SPI_DEV);
 	spi_enable(SPI_DEV);
 
 	gpio_set_mux(SPI_DEV_GMUX);
@@ -172,14 +170,28 @@ static void spidev_xfer_setup(const spidev_xfer_t *xfer)
 {
 	dma_setup_channel(SPI_DMA, SPI_DMA_RX_CH, xfer->rx, xfer->len);
 	dma_setup_channel(SPI_DMA, SPI_DMA_TX_CH, xfer->tx, xfer->len);
-}
-
-static void spidev_xfer_start(const spidev_xfer_t *xfer)
-{
-	spidev_xfer_setup(xfer);
-	gpio_clear(SPI_GPIO_PORT, SPI_GPIO_NSS);
 	dma_enable_channel(SPI_DMA, SPI_DMA_RX_CH);
 	dma_enable_channel(SPI_DMA, SPI_DMA_TX_CH);
+}
+
+static void spidev_xfer_poll(const spidev_xfer_t *xfer)
+{
+	const uint8_t *tx = xfer->tx;
+	uint8_t *rx = xfer->rx;
+
+	for (int i = 0; i < xfer->len; i++) {
+		uint8_t data = spi_xfer(SPI_DEV, tx ? *tx++ : 0);
+		if (rx)
+			*rx++ = data;
+	}
+}
+
+static void spidev_xfer_done(void)
+{
+	spi_disable_tx_dma(SPI_DEV);
+	spi_disable_rx_dma(SPI_DEV);
+	while (SPI_SR(SPI_DEV) & SPI_SR_BSY);
+	gpio_set(SPI_GPIO_PORT, SPI_GPIO_NSS);
 }
 
 static void spidev_transceive(const spidev_xfer_t *s, int count)
@@ -187,10 +199,22 @@ static void spidev_transceive(const spidev_xfer_t *s, int count)
 	BGRT_ASSERT(s, "s != NULL");
 	BGRT_ASSERT(count, "count != 0");
 
-	current = s;
-	nxfers = count;
-	spidev_xfer_start(s);
-	bgrt_sem_lock(&spidev_sem);
+	gpio_clear(SPI_GPIO_PORT, SPI_GPIO_NSS);
+	while (count && s->len < SPIDEV_XFER_ASYNC_LEN) {
+		spidev_xfer_poll(s++);
+		count--;
+	}
+
+	if (count) {
+		current = s;
+		nxfers = count;
+		spidev_xfer_setup(current);
+		spi_enable_rx_dma(SPI_DEV);
+		spi_enable_tx_dma(SPI_DEV);
+		bgrt_sem_lock(&spidev_sem);
+	} else {
+		spidev_xfer_done();
+	}
 }
 
 static void extint_wait()
