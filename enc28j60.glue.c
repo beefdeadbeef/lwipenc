@@ -129,7 +129,7 @@ static void spidev_ll_init()
 	dma_set_peripheral_address(SPI_DMA, SPI_DMA_TX_CH, (uint32_t)&SPI_DR(SPI_DEV));
 
 	spi_init_master(SPI_DEV,
-                        SPI_CR1_BAUDRATE_FPCLK_DIV_16,
+                        SPI_CR1_BAUDRATE_FPCLK_DIV_8,
                         SPI_CR1_CPOL_CLK_TO_0_WHEN_IDLE,
                         SPI_CR1_CPHA_CLK_TRANSITION_1,
                         SPI_CR1_DFF_8BIT,

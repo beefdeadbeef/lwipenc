@@ -1,0 +1,155 @@
+#+TITLE: lwipenc throughput investigation
+#+STARTUP: overview
+
+* Findings
+
+** SPI clock and ENC28J60 limit
+
+- The original ~SPI_CR1_BAUDRATE_FPCLK_DIV_16~ setting gives 7.5 MHz from
+  the 120 MHz APB1 peripheral clock.
+- ~SPI_CR1_BAUDRATE_FPCLK_DIV_8~ gives 15 MHz, below the ENC28J60's 20 MHz
+  maximum SCK frequency (datasheet, page 82, Table 16-6).
+- When using 15 MHz, configure SCK and MOSI as ~GPIO_MODE_OUTPUT_50_MHZ~
+  rather than ~GPIO_MODE_OUTPUT_10_MHZ~. This controls output drive/slew
+  rate, not the SPI clock divider. Verify signal integrity on the actual
+  board and module wiring.
+- The observed improvement from approximately 300 KiB/s to 350 KiB/s is
+  plausible: SPI transfers are only one part of the serialized echo path.
+
+** Estimated SPI and wire costs
+
+For an IPv4/TCP frame carrying 1460 bytes without TCP options or VLAN:
+
+- One 1514-byte buffer transfer takes approximately 1.616 ms at 7.5 MHz
+  or 0.808 ms at 15 MHz, excluding command bytes and software gaps.
+- RX plus TX payload traffic therefore takes approximately 3.23 ms at
+  7.5 MHz or 1.62 ms at 15 MHz.
+- A full frame takes approximately 1.22 ms on the 10 Mb/s Ethernet wire,
+  including preamble and CRC. This does not change with SPI frequency.
+- An ordinary two-byte register operation takes only about 2.13 us of
+  clock time at 7.5 MHz or 1.07 us at 15 MHz. Its DMA, interrupt and
+  synchronization overhead is consequently much more important.
+
+** Driver structure
+
+- Every SPI operation is synchronous. Even short register accesses program
+  both DMA channels, wait for completion, enter the DMA ISR, queue a
+  BuguRTOS virtual interrupt and release a semaphore.
+  See ~enc28j60.glue.c:67-87~ and ~enc28j60.glue.c:156-193~.
+- A normal full-frame echo involves roughly 35 synchronous SPI calls,
+  excluding additional ACK traffic. Many are only a few bytes long.
+- RX writes ~ERDPT~ separately for the status vector and payload, updates
+  ~ERXRDPT~ and decrements ~EPKTCNT~. See ~enc28j60.c:247-263~ and
+  ~enc28j60.c:582-625~.
+- A 16-bit pointer write is implemented as two separate SPI transactions.
+  See ~enc28j60.c:235-241~.
+- TX is only one frame deep. The TX thread waits for ~txready~ before
+  uploading the next frame, so uploading frame N+1 cannot overlap wire
+  transmission of frame N. See ~enc28j60.c:776-790~.
+- RX-to-TX processing crosses the RX thread, lwIP thread, echo worker and
+  TX thread.
+- The echo application copies payload fragments with ~NETCONN_COPY~.
+  See ~main.c:60-63~.
+
+** Live PC-sampling profile
+
+Thirteen one-second profiles were collected with Orbuculum/orbtop during
+the live echo test. No trace overflows or decoder errors were reported.
+
+Representative interval, with 14841 PC samples:
+
+| Location                                             | Samples |
+|------------------------------------------------------+---------|
+| Sleeping                                             | 70.1%   |
+| Scheduler loop inlined into ~main.isra.0~            |  5.6%   |
+| ~pend_sv_handler~                                    |  3.9%   |
+| ~lwip_standard_chksum~                               |  1.6%   |
+| ~bgrt_priv_sync_sleep~                               |  1.5%   |
+| ~bgrt_pitem_fast_cut~ plus ~bgrt_pitem_insert~       |  2.7%   |
+| ~_sem_lock_fsm~                                      |  1.0%   |
+| ~spidev_xfer_setup~                                  |  0.5%   |
+| ~spidev_transceive~                                  |  0.4%   |
+| ~dma2_channel1_isr~                                  |  0.4%   |
+| ~memcpy~                                             |  0.1%   |
+
+Many other samples belong to BuguRTOS synchronization, syscalls and
+process management. The firmware is therefore not CPU-saturated; waiting
+and per-transaction scheduling/synchronization are prominent costs.
+Checksums and copying are not the primary costs in this profile.
+
+Profiling caveats:
+
+- LTO produces imperfect function and source attribution. Disassembly
+  showed that ~main.isra.0~ contains the inlined BuguRTOS scheduler loop;
+  its samples are not application initialization work.
+- ~objdump~ warned that ~enc28j60.glue.c~ was newer than ~fw.elf~. The
+  percentages assume the ELF matched the running image and should be
+  treated as approximate.
+- PC sampling does not identify which event each sleeping thread awaits
+  and does not directly measure time spent in SPI or Ethernet hardware.
+
+* TODO Measure transaction and wait times with DWT cycle counters
+
+- [ ] Record cycles around ~spidev_transceive()~, separating short register
+  operations from packet-buffer transfers.
+- [ ] Record time spent waiting for ~txready~.
+- [ ] Measure RX-to-TX echo latency and time from ~TXRTS~ to TX completion.
+- [ ] Repeat the measurements at DIV_16 and DIV_8 under identical traffic.
+- [ ] Use a packet capture to establish MSS usage and ACK frequency.
+- [ ] If available, use a logic analyzer on CS/SCK/INT to validate the DWT
+  results and expose gaps between DMA descriptors.
+
+* DONE Use a lightweight polled path for short SPI register accesses
+
+Descriptors shorter than four bytes now use ~spi_xfer()~ polling.  For mixed
+transactions, the short prefix is polled and DMA chaining starts at the first
+longer descriptor, so packet payloads retain their DMA path.
+
+- SPI RX/TX DMA requests are disabled for polling and enabled only for DMA
+  descriptors; both are disabled again at completion.
+- The polled path supports null TX/RX pointers by sending zeroes or discarding
+  received data, matching the existing DMA descriptor semantics.
+- Completion waits for SPI ~BSY~ to clear before releasing chip select.
+- The original failure was caused by leaving SPI DMA requests enabled while
+  polling, together with unconditional null TX/RX dereferences.
+
+Verified on the target with the DEBUG=RTT image: DHCP and ping work, and echo
+payloads of 1, 2, 3, 4, 16, 1500, 16384, and 65536 bytes match.  Idle SPI state
+has both DMA requests disabled and ~BSY~ clear.  No comparable before/after
+throughput benchmark was collected; a short echo run is not such a benchmark.
+
+Live PC sampling reports 85--87% sleeping time versus approximately 70%
+before, while Ethernet throughput is nearly unchanged.  This indicates a
+substantial reduction in short-transaction scheduling/synchronization overhead,
+but not in the serialized packet-transfer path.  Use the DWT measurements
+above to quantify the remaining waits before further SPI optimization.
+
+* TODO Reduce repeated register and interrupt-pass overhead
+
+- [ ] Review whether 16-bit pointer accesses can share one SPI transaction.
+- [ ] Reduce unnecessary bank transitions.
+- [ ] After checking interrupt races, avoid repeating the full EIR/EPKTCNT
+  pass merely because one packet was handled.
+- [ ] Preserve the required ENC28J60 receive errata workarounds.
+
+* TODO Consider overlapping TX upload and Ethernet transmission
+
+Evaluate two ENC28J60 TX buffers so the next packet can be uploaded while
+the current packet is on the wire. This requires repartitioning the ENC
+SRAM and changing the ~txready~ design; it is a larger change than the
+short-register optimization.
+
+* TODO Defer application-level copying changes
+
+Only investigate removing ~NETCONN_COPY~ after transaction and wait-time
+measurements justify it. A zero-copy write requires correct payload
+lifetime management; changing the flag alone is unsafe.
+
+* Related correctness and maintenance items
+
+- [ ] Check ~netconn_write()~ errors in the echo worker.
+- [ ] Fix ~link.xmit~ being incremented at both TX start and TX completion;
+  it is not currently a valid packet counter.
+- [ ] Consider timeouts for SPI/DMA waits.
+- [ ] Update the documented SPI clock and GPIO configuration after changing
+  the divider and output mode.
