@@ -786,7 +786,6 @@ loop:	sys_mbox_fetch(&priv->txqueue, (void **)&p);
 	/* set TX request flag */
 	reg_bfset(priv, ECON1, ECON1_TXRTS);
 	sys_mutex_unlock(&priv->lock);
-	LINK_STATS_INC(link.xmit);
 	pbuf_free(p);
 
 	goto loop;
